@@ -370,6 +370,7 @@ async fn control_plane_get_watch_apply_config() -> Result<()> {
                     target_node_id: server.id().as_bytes().to_vec(),
                     expected_revision: 0,
                     config: Some(applied_config.clone()),
+                    plugin_command_approvals: vec![],
                 }),
                 ..owner_control_request(3)
             }),
@@ -413,6 +414,7 @@ async fn control_plane_get_watch_apply_config() -> Result<()> {
                     target_node_id: server.id().as_bytes().to_vec(),
                     expected_revision: 1,
                     config: Some(applied_config),
+                    plugin_command_approvals: vec![],
                 }),
                 ..owner_control_request(4)
             }),
@@ -505,6 +507,7 @@ async fn control_plane_watch_observes_apply_revision() -> Result<()> {
                         mesh_requirements: None,
                         lifecycle_log_parser: None,
                     }),
+                    plugin_command_approvals: vec![],
                 }),
                 ..owner_control_request(11)
             }),
@@ -665,6 +668,7 @@ async fn control_plane_watch_without_snapshot_observes_apply_revision() -> Resul
                         mesh_requirements: None,
                         lifecycle_log_parser: None,
                     }),
+                    plugin_command_approvals: vec![],
                 }),
                 ..owner_control_request(14)
             }),
@@ -746,6 +750,7 @@ async fn control_plane_apply_rejects_stale_revision() -> Result<()> {
                     mesh_requirements: None,
                     lifecycle_log_parser: None,
                 }),
+                plugin_command_approvals: vec![],
             }),
             ..owner_control_request(request_id)
         }),
@@ -828,6 +833,7 @@ async fn control_plane_apply_rejects_malformed_full_config_toml() -> Result<()> 
                         mesh_requirements: None,
                         lifecycle_log_parser: None,
                     }),
+                    plugin_command_approvals: vec![],
                 }),
                 ..owner_control_request(22)
             }),
@@ -900,7 +906,7 @@ async fn owner_control_client_reuses_connection_for_sequential_requests() -> Res
     // A shorter outer deadline makes this connection-reuse assertion flaky on
     // loaded CI hosts without testing any additional production behavior.
     let apply = control_client
-        .apply_config(snapshot.revision, config)
+        .apply_config(snapshot.revision, config, vec![])
         .await?;
 
     assert!(apply.success);
