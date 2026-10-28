@@ -255,6 +255,8 @@ mod tests {
         let command = Command::Load {
             name: "private-model.gguf?token=private-token".to_string(),
             port: 41731,
+            ctx_size: None,
+            parallel: None,
         };
         let events = lifecycle_events(&command, &Ok(()));
         assert_eq!(
@@ -341,6 +343,8 @@ mod tests {
         let boundary = CommandDispatchBoundary::start(&Command::Load {
             name: "model.gguf".to_string(),
             port: 9337,
+            ctx_size: None,
+            parallel: None,
         });
         boundary.finish(&Ok(()));
         assert_eq!(sink.take_events().len(), 2);
@@ -360,6 +364,8 @@ mod tests {
         let boundary = CommandDispatchBoundary::start(&Command::Load {
             name: "private-model.gguf".to_string(),
             port: 41731,
+            ctx_size: None,
+            parallel: None,
         });
         boundary.finish(&Err(anyhow!("private dispatch failure")));
         assert!(cli_operational_audit_bridge().is_none());
@@ -411,6 +417,8 @@ mod tests {
         let boundary = CommandDispatchBoundary::start(&Command::Load {
             name: "model.gguf".to_owned(),
             port: 9337,
+            ctx_size: None,
+            parallel: None,
         });
         boundary.finish(&Ok(()));
         assert_eq!(
