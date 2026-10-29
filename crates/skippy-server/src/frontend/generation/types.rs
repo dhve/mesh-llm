@@ -74,6 +74,35 @@ pub(in crate::frontend) struct StageOpenAiBackend {
     pub(in crate::frontend) linear_proposal_ingress: Option<LinearProposalIngressConfig>,
     pub(in crate::frontend) kv: Option<Arc<KvStageIntegration>>,
     pub(in crate::frontend) iteration_scheduler: IterationScheduler,
+    /// Set only on the per-request clone made by
+    /// [`Self::scoped_for_local_only`]; selects the strict completion budget
+    /// and stops the clone from scoping itself again.
+    pub(in crate::frontend) local_only_scope: bool,
+}
+
+impl StageOpenAiBackend {
+    /// A per-request view of this backend for
+    /// `OpenAiRequestContext::with_local_only_policy`: no generation receipt
+    /// observes the request, the prefix KV cache is neither consulted nor
+    /// updated, no hook policy runs, and an explicit completion budget must fit
+    /// the context exactly. Every admission, concurrency, token budget and
+    /// runtime handle is shared with `self`, so global limits still apply.
+    pub(in crate::frontend) fn scoped_for_local_only(&self) -> Self {
+        Self {
+            generation_receipt: None,
+            kv: None,
+            hook_policy: None,
+            // The proposal ingress forwards generated token ids to a serving
+            // callback (linear_decode.rs); not for a privacy-scoped request.
+            linear_proposal_ingress: None,
+            // Debug telemetry attaches `predicted_token` per decode step.
+            telemetry: self
+                .telemetry
+                .capped_at(crate::telemetry::TelemetryLevel::Summary),
+            local_only_scope: true,
+            ..self.clone()
+        }
+    }
 }
 
 #[derive(Clone)]

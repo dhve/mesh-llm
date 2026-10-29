@@ -54,8 +54,8 @@ pub use frontend::{
     EmbeddedReasoningFormat, LinearProposal, LinearProposalDiscardReason,
     LinearProposalDisposition, LinearProposalIngress, LinearProposalQuery, LinearProposalReceipt,
     LinearProposalSourceOutcome, LinearProposalSourceResponse, LinearProposalSourceTelemetry,
-    NativeMtpProposalConfig, NgramExtensionConfig, NgramProposalConfig, NgramProposerKind,
-    OpaqueProposalDecisionId, OpenAiGuardrailsConfig, OpenAiGuardrailsStatus,
+    LocalCompletionCapability, NativeMtpProposalConfig, NgramExtensionConfig, NgramProposalConfig,
+    NgramProposerKind, OpaqueProposalDecisionId, OpenAiGuardrailsConfig, OpenAiGuardrailsStatus,
     OpenAiGuardrailsTarget, SpeculativeDecodeConfig, VerifyWindowConfig, embedded_openai_backend,
 };
 pub use skippy_protocol::StageConfig;

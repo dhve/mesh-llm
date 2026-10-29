@@ -739,6 +739,12 @@ pub(in crate::frontend) enum GenerationTokenLimit {
     /// window; otherwise return a context_length_exceeded error so the
     /// client knows their request couldn't be honored as-asked.
     Explicit(u32),
+    /// Client sent a concrete `max_tokens` under the local-only policy
+    /// (`OpenAiRequestContext::with_local_only_policy`). The whole budget
+    /// must fit the remaining context; a budget that would otherwise be
+    /// clamped is a `context_length_exceeded` error, never a silent
+    /// reduction, so the caller can tell that nothing was truncated.
+    ExplicitStrict(u32),
     /// Caller didn't send `max_tokens`, but the server has a configured
     /// default cap. Clamp down to whatever fits in the remaining
     /// context budget rather than rejecting — the client didn't ask
@@ -762,6 +768,19 @@ impl GenerationTokenLimit {
         }
     }
 
+    /// Like [`Self::from_request`], but an explicit budget becomes
+    /// [`Self::ExplicitStrict`] when `strict` is set.
+    pub(in crate::frontend) fn from_request_with_strictness(
+        requested: Option<u32>,
+        default_max_tokens: u32,
+        strict: bool,
+    ) -> Self {
+        match (requested, strict) {
+            (Some(max_tokens), true) => Self::ExplicitStrict(max_tokens),
+            _ => Self::from_request(requested, default_max_tokens),
+        }
+    }
+
     pub(in crate::frontend) fn resolve(
         self,
         prompt_token_count: usize,
@@ -782,6 +801,18 @@ impl GenerationTokenLimit {
                 // comfortably — issue #1350.
                 let remaining = context_budget_completion_tokens(prompt_token_count, ctx_size)?;
                 Ok(remaining.min(max_tokens))
+            }
+            Self::ExplicitStrict(max_tokens) => {
+                let remaining = context_budget_completion_tokens(prompt_token_count, ctx_size)?;
+                if max_tokens > remaining {
+                    return Err(openai_frontend::OpenAiError::context_length_exceeded(
+                        format!(
+                            "max_completion_tokens {max_tokens} exceeds the remaining context budget of \
+                         {remaining} tokens after a {prompt_token_count}-token prompt"
+                        ),
+                    ));
+                }
+                Ok(max_tokens)
             }
             Self::Default(default_max_tokens) => {
                 // Server-picked default. Always clamp to the remaining
@@ -944,5 +975,37 @@ mod service_estimator_tests {
     fn conservative_rate_uses_the_slower_p95_sample() {
         let samples = VecDeque::from([1.0, 1.0, 1.0, 10.0]);
         assert_eq!(conservative_ms_per_token(Some(1.5), &samples), Some(10.0));
+    }
+}
+
+#[cfg(test)]
+mod explicit_strict_budget_tests {
+    use super::*;
+
+    #[test]
+    fn strict_budget_is_an_error_instead_of_a_silent_clamp() {
+        let strict = GenerationTokenLimit::from_request_with_strictness(Some(512), 4096, true);
+        assert_eq!(strict, GenerationTokenLimit::ExplicitStrict(512));
+        // A 100-token prompt in a 300-token window cannot hold 512 more tokens.
+        let error = strict
+            .resolve(100, 300)
+            .expect_err("a budget that would be clamped must be rejected");
+        assert_eq!(
+            error.kind(),
+            Some(openai_frontend::OpenAiErrorKind::ContextLengthExceeded)
+        );
+        assert_eq!(strict.resolve(100, 4096).expect("fits"), 512);
+    }
+
+    #[test]
+    fn non_strict_explicit_budget_keeps_clamping_behaviour() {
+        let lenient = GenerationTokenLimit::from_request_with_strictness(Some(512), 4096, false);
+        assert_eq!(lenient, GenerationTokenLimit::Explicit(512));
+        assert!(lenient.resolve(100, 300).expect("clamped, not rejected") < 512);
+        assert_eq!(
+            GenerationTokenLimit::from_request_with_strictness(None, 4096, true),
+            GenerationTokenLimit::Default(4096),
+            "strictness only applies to an explicit budget"
+        );
     }
 }

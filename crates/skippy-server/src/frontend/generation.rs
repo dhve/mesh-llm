@@ -16,6 +16,7 @@ pub(crate) use server::serve_embedded_openai_with_scheduler;
 pub use server::{
     EmbeddedOpenAiArgs, EmbeddedOpenAiBackend, EmbeddedOpenAiRequestDefaults, EmbeddedOpenAiRouter,
     EmbeddedReasoningBudget, EmbeddedReasoningEnabled, EmbeddedReasoningFormat,
+    LocalCompletionCapability,
 };
 pub use server::{
     embedded_openai_backend, embedded_openai_router, serve_embedded_openai,

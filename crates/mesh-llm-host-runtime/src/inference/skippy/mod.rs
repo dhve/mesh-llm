@@ -25,6 +25,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use crate::inference::local_completion::{LocalCompletionLeases, LocalModelLoadShape};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use openai_frontend::{
@@ -40,10 +41,11 @@ use skippy_server::serving_hooks::{ModelServingHooks, SharedModelServingHooksFac
 use skippy_server::{
     DEFAULT_EMBEDDED_MAX_TOKENS, DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS, EmbeddedOpenAiArgs,
     EmbeddedRuntimeOptions, EmbeddedRuntimeStatus, EmbeddedServerHandle, EmbeddedState,
-    OpenAiGuardrailsConfig, OpenAiGuardrailsStatus, OpenAiGuardrailsTarget, SkippyRuntimeHandle,
-    binary_transport::PredictionReturnHub, binary_transport::PredictionReturnListener,
-    binary_transport::WireCondition, embedded_openai_backend, runtime_state::RuntimeState,
-    telemetry::Telemetry, telemetry::TelemetryLevel,
+    LocalCompletionCapability, OpenAiGuardrailsConfig, OpenAiGuardrailsStatus,
+    OpenAiGuardrailsTarget, SkippyRuntimeHandle, binary_transport::PredictionReturnHub,
+    binary_transport::PredictionReturnListener, binary_transport::WireCondition,
+    embedded_openai_backend, runtime_state::RuntimeState, telemetry::Telemetry,
+    telemetry::TelemetryLevel,
 };
 
 pub use certification::{
@@ -489,6 +491,15 @@ pub(crate) struct SkippyModelHandle {
     started_at_unix_nanos: i64,
     status: Arc<Mutex<HandleState>>,
     _prediction_return_listener: Option<PredictionReturnListener>,
+    /// The id the embedded backend answers to.
+    served_model_id: String,
+    /// Backend before guardrail and compaction wrapping; honours
+    /// `chat_completion_with_context`. Used by local-only completion.
+    local_backend: Arc<dyn OpenAiBackend>,
+    load_shape: LocalModelLoadShape,
+    local_completion_capability: LocalCompletionCapability,
+    /// In-flight local-only completions; drained before the runtime stops.
+    local_completions: Arc<LocalCompletionLeases>,
 }
 
 pub(crate) struct SkippyHttpHandle {
@@ -716,6 +727,9 @@ impl SkippyModelHandle {
             &serving_hooks,
         )?)
         .context("construct skippy OpenAI backend")?;
+        let local_backend = Arc::clone(&binding.backend);
+        let served_model_id = binding.model_id.clone();
+        let local_completion_capability = binding.local_completion;
         let backend = wrap_host_guardrail_backend(
             binding.backend,
             openai_guardrails.as_ref(),
@@ -735,6 +749,11 @@ impl SkippyModelHandle {
                 last_error: None,
             })),
             _prediction_return_listener: None,
+            served_model_id,
+            local_backend,
+            load_shape: LocalModelLoadShape::for_capability(&local_completion_capability),
+            local_completion_capability,
+            local_completions: LocalCompletionLeases::new(),
         })
     }
 
@@ -800,6 +819,9 @@ impl SkippyModelHandle {
             &serving_hooks,
         )?)
         .context("construct skippy OpenAI backend")?;
+        let local_backend = Arc::clone(&binding.backend);
+        let served_model_id = binding.model_id.clone();
+        let local_completion_capability = binding.local_completion;
         let backend = wrap_host_guardrail_backend(
             binding.backend,
             openai_guardrails.as_ref(),
@@ -819,6 +841,11 @@ impl SkippyModelHandle {
                 last_error: None,
             })),
             _prediction_return_listener: None,
+            served_model_id,
+            local_backend,
+            load_shape: LocalModelLoadShape::for_capability(&local_completion_capability),
+            local_completion_capability,
+            local_completions: LocalCompletionLeases::new(),
         })
     }
 
@@ -939,6 +966,9 @@ impl SkippyModelHandle {
             &serving_hooks,
         )?)
         .context("construct skippy stage 0 OpenAI backend")?;
+        let local_backend = Arc::clone(&binding.backend);
+        let served_model_id = binding.model_id.clone();
+        let local_completion_capability = binding.local_completion;
         let backend = wrap_host_guardrail_backend(
             binding.backend,
             guardrails.config.as_ref(),
@@ -958,6 +988,11 @@ impl SkippyModelHandle {
                 last_error: None,
             })),
             _prediction_return_listener: prediction_return_listener,
+            served_model_id,
+            local_backend,
+            load_shape: LocalModelLoadShape::for_capability(&local_completion_capability),
+            local_completion_capability,
+            local_completions: LocalCompletionLeases::new(),
         })
     }
 
@@ -1025,6 +1060,9 @@ impl SkippyModelHandle {
             &serving_hooks,
         )?)
         .context("construct skippy stage 0 OpenAI backend")?;
+        let local_backend = Arc::clone(&binding.backend);
+        let served_model_id = binding.model_id.clone();
+        let local_completion_capability = binding.local_completion;
         let backend = wrap_host_guardrail_backend(
             binding.backend,
             guardrails.config.as_ref(),
@@ -1044,11 +1082,50 @@ impl SkippyModelHandle {
                 last_error: None,
             })),
             _prediction_return_listener: prediction_return_listener,
+            served_model_id,
+            local_backend,
+            load_shape: LocalModelLoadShape::for_capability(&local_completion_capability),
+            local_completion_capability,
+            local_completions: LocalCompletionLeases::new(),
         })
     }
 
     pub(crate) fn backend(&self) -> Arc<dyn OpenAiBackend> {
         self.backend.clone()
+    }
+
+    /// The id the embedded backend answers to.
+    pub(crate) fn served_model_id(&self) -> &str {
+        &self.served_model_id
+    }
+
+    /// Backend before guardrail and compaction wrapping. It honours
+    /// `chat_completion_with_context`, which the wrapped backend may not.
+    pub(crate) fn local_backend(&self) -> Arc<dyn OpenAiBackend> {
+        Arc::clone(&self.local_backend)
+    }
+
+    pub(crate) fn load_shape(&self) -> LocalModelLoadShape {
+        self.load_shape
+    }
+
+    pub(crate) fn local_completion_capability(&self) -> LocalCompletionCapability {
+        self.local_completion_capability
+    }
+
+    pub(crate) fn local_completion_leases(&self) -> Arc<LocalCompletionLeases> {
+        Arc::clone(&self.local_completions)
+    }
+
+    pub(crate) fn stage_id(&self) -> &str {
+        &self.config.stage_id
+    }
+
+    /// Cancel every in-flight local-only completion and wait for all of them
+    /// to terminate. Never times out: a backend that ignores cancellation
+    /// keeps its lease, and the native runtime must not be released under it.
+    pub(crate) async fn drain_local_completions(&self) {
+        self.local_completions.cancel_and_drain().await;
     }
 
     pub(crate) fn openai_guardrails(&self) -> Option<OpenAiGuardrailsStatus> {
@@ -1113,6 +1190,8 @@ impl SkippyModelHandle {
         record_native_skippy_operational_event(
             NativeSkippyOperationalEvent::RuntimeShutdownStarted,
         );
+        // Synchronous backstop for callers that did not drain first.
+        self.local_completions.cancel_and_block_until_drained();
         self.runtime.shutdown();
         let mut state = self.status.lock().expect("skippy status lock poisoned");
         state.state = SkippyModelState::Stopped;
@@ -1167,6 +1246,16 @@ impl OpenAiBackend for SkippyModelHandle {
         request: ChatCompletionRequest,
     ) -> OpenAiResult<ChatCompletionResponse> {
         self.backend.chat_completion(request).await
+    }
+
+    async fn chat_completion_with_context(
+        &self,
+        request: ChatCompletionRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<ChatCompletionResponse> {
+        self.backend
+            .chat_completion_with_context(request, context)
+            .await
     }
 
     async fn chat_completion_stream(

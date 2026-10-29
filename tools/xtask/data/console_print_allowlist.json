@@ -4397,11 +4397,11 @@
   ],
   "crates/skippy-server/src/frontend/generation/server.rs": [
     {
-      "line": 193,
+      "line": 194,
       "macro_name": "println!"
     },
     {
-      "line": 340,
+      "line": 341,
       "macro_name": "println!"
     }
   ],
@@ -4425,7 +4425,7 @@
       "macro_name": "eprintln!"
     },
     {
-      "line": 310,
+      "line": 311,
       "macro_name": "eprintln!"
     }
   ],

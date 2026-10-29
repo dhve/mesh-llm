@@ -1,4 +1,7 @@
 use super::status::OpenAiGuardrailsPayload;
+use crate::inference::local_completion::{
+    LocalCompletionAdmitted, LocalCompletionError, LocalCompletionModel, LocalCompletionRequest,
+};
 use crate::mesh;
 use crate::network::affinity;
 use crate::network::discovery::MeshDiscoveryMode;
@@ -61,6 +64,20 @@ pub enum RuntimeControlRequest {
     SetOpenAiGuardrailMode {
         mode: GuardrailMode,
         resp: tokio::sync::oneshot::Sender<anyhow::Result<OpenAiGuardrailModeUpdateResponse>>,
+    },
+    /// Content-free listing of locally loaded models and their eligibility
+    /// for local-only completion.
+    LocalCompletionModels {
+        resp: tokio::sync::oneshot::Sender<Result<Vec<LocalCompletionModel>, LocalCompletionError>>,
+    },
+    /// Admit one local-only completion. `permit` is the client's single
+    /// admission permit, taken before this request was enqueued; the runtime
+    /// supervisor holds it until the backend terminates.
+    LocalCompletion {
+        request: LocalCompletionRequest,
+        cancellation: openai_frontend::CancellationToken,
+        permit: tokio::sync::OwnedSemaphorePermit,
+        resp: tokio::sync::oneshot::Sender<Result<LocalCompletionAdmitted, LocalCompletionError>>,
     },
     Shutdown {
         source: &'static str,

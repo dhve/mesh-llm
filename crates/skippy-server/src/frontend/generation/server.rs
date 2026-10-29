@@ -185,6 +185,7 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
         linear_proposal_ingress: None,
         kv,
         iteration_scheduler,
+        local_only_scope: false,
     });
     let backend = OpenAiGuardrailsConfig::for_standalone_mode(args.openai_guardrails)
         .wrap_backend_with_context_limit(backend, Some(ctx_size));
@@ -368,6 +369,31 @@ pub struct EmbeddedOpenAiBackend {
     pub generation_queue_capacity: usize,
     pub generation_admission_timeout_secs: u64,
     pub openai_guardrails: Option<OpenAiGuardrailsStatus>,
+    /// Content-free facts a host needs before admitting a local-only
+    /// completion against this backend.
+    pub local_completion: LocalCompletionCapability,
+}
+
+/// Content-free capability facts about an embedded OpenAI backend.
+///
+/// A host that wants to run a completion strictly on this machine checks
+/// these before it passes any prompt content to the backend.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LocalCompletionCapability {
+    /// The stage config has neither an upstream nor a downstream stage, so
+    /// the whole model executes in this process.
+    pub single_stage: bool,
+    /// A generation receipt sink is configured. The local-only policy
+    /// suppresses it per request.
+    pub receipts_configured: bool,
+    /// A prefix KV cache integration is configured. The local-only policy
+    /// bypasses it per request. In this version the cache is in-memory only.
+    pub kv_cache_configured: bool,
+    /// The backend observes `OpenAiRequestContext` cancellation between
+    /// decode steps.
+    pub honours_request_context: bool,
+    /// The backend honours `OpenAiRequestContext::with_local_only_policy`.
+    pub local_only_policy_supported: bool,
 }
 
 pub fn embedded_openai_router(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenAiRouter> {
@@ -499,6 +525,13 @@ fn embedded_openai_backend_with_scheduler(
         loaded_model_state_kind(Some(&args.runtime)),
     )?
     .map(Arc::new);
+    let local_completion = LocalCompletionCapability {
+        single_stage: args.config.upstream.is_none() && args.config.downstream.is_none(),
+        receipts_configured: args.generation_receipt.is_some(),
+        kv_cache_configured: kv.is_some(),
+        honours_request_context: true,
+        local_only_policy_supported: true,
+    };
     let ctx_size = usize::try_from(args.config.ctx_size).unwrap_or(usize::MAX);
     let iteration_scheduler = match iteration_scheduler {
         Some(iteration_scheduler) => iteration_scheduler,
@@ -544,6 +577,7 @@ fn embedded_openai_backend_with_scheduler(
         linear_proposal_ingress: args.linear_proposal_ingress,
         kv,
         iteration_scheduler,
+        local_only_scope: false,
     });
     let openai_guardrails = args
         .openai_guardrails
@@ -563,6 +597,7 @@ fn embedded_openai_backend_with_scheduler(
         generation_queue_capacity: args.generation_queue_capacity,
         generation_admission_timeout_secs: args.generation_admission_timeout_secs,
         openai_guardrails,
+        local_completion,
     })
 }
 

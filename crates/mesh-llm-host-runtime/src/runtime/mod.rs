@@ -11,6 +11,7 @@ pub mod instance;
 mod instance_lifecycle;
 mod interactive;
 mod local;
+mod local_completion;
 mod local_model_only;
 mod local_package;
 mod local_split;

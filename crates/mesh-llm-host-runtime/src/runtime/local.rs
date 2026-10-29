@@ -84,13 +84,21 @@ pub(super) enum RuntimeEvent {
 
 pub(super) enum LocalRuntimeBackendHandle {
     Skippy {
-        model: skippy::SkippyModelHandle,
+        model: Box<skippy::SkippyModelHandle>,
         http: skippy::SkippyHttpHandle,
         _death_tx: tokio::sync::oneshot::Sender<()>,
     },
+    /// Test-only stand-in for an embedded model: an in-process fake backend
+    /// behind the same lease and target plumbing as `Skippy`, so dispatch and
+    /// shutdown tests run the production path without a native runtime.
+    #[cfg(test)]
+    LocalCompletionFake(crate::runtime::local_completion::FakeLocalModel),
 }
 
 pub(super) struct LocalRuntimeModelHandle {
+    // First field: retire startup admission before backend destruction on plain drop.
+    pub(super) startup_registration:
+        std::sync::Mutex<Option<super::local_completion::StartupRegistration>>,
     pub(super) port: u16,
     pub(super) backend: String,
     pub(super) context_length: u32,
@@ -99,10 +107,47 @@ pub(super) struct LocalRuntimeModelHandle {
     pub(super) inner: LocalRuntimeBackendHandle,
 }
 
+/// The in-process backend and lease registry of a loaded model, for
+/// local-only completion.
+pub(super) struct LocalCompletionTarget<'a> {
+    pub(super) served_model_id: &'a str,
+    pub(super) stage_id: &'a str,
+    pub(super) backend: std::sync::Arc<dyn openai_frontend::OpenAiBackend>,
+    pub(super) load_shape: crate::inference::local_completion::LocalModelLoadShape,
+    pub(super) capability: crate::inference::local_completion::LocalCompletionCapability,
+    pub(super) leases: std::sync::Arc<crate::inference::local_completion::LocalCompletionLeases>,
+}
+
 impl LocalRuntimeModelHandle {
+    /// The in-process backend for local-only completion, when this record is
+    /// an embedded skippy model.
+    pub(super) fn local_completion_target(&self) -> Option<LocalCompletionTarget<'_>> {
+        match &self.inner {
+            LocalRuntimeBackendHandle::Skippy { model, .. } => Some(LocalCompletionTarget {
+                served_model_id: model.served_model_id(),
+                stage_id: model.stage_id(),
+                backend: model.local_backend(),
+                load_shape: model.load_shape(),
+                capability: model.local_completion_capability(),
+                leases: model.local_completion_leases(),
+            }),
+            #[cfg(test)]
+            LocalRuntimeBackendHandle::LocalCompletionFake(fake) => Some(LocalCompletionTarget {
+                served_model_id: &fake.served_model_id,
+                stage_id: &fake.stage_id,
+                backend: std::sync::Arc::clone(&fake.backend),
+                load_shape: fake.load_shape,
+                capability: fake.capability,
+                leases: std::sync::Arc::clone(&fake.leases),
+            }),
+        }
+    }
+
     pub(super) fn pid(&self) -> u32 {
         match &self.inner {
             LocalRuntimeBackendHandle::Skippy { .. } => std::process::id(),
+            #[cfg(test)]
+            LocalRuntimeBackendHandle::LocalCompletionFake(_) => std::process::id(),
         }
     }
 
@@ -111,18 +156,26 @@ impl LocalRuntimeModelHandle {
             LocalRuntimeBackendHandle::Skippy { model, .. } => {
                 Some(model.status().max_session_tokens)
             }
+            #[cfg(test)]
+            LocalRuntimeBackendHandle::LocalCompletionFake(_) => None,
         }
     }
 
     pub(super) fn openai_guardrails(&self) -> Option<skippy::SkippyOpenAiGuardrailsStatus> {
         match &self.inner {
             LocalRuntimeBackendHandle::Skippy { model, .. } => model.openai_guardrails(),
+            #[cfg(test)]
+            LocalRuntimeBackendHandle::LocalCompletionFake(_) => None,
         }
     }
 
     pub(super) fn openai_server_status(&self) -> skippy_server::EmbeddedServerStatus {
         match &self.inner {
             LocalRuntimeBackendHandle::Skippy { http, .. } => http.status(),
+            #[cfg(test)]
+            LocalRuntimeBackendHandle::LocalCompletionFake(_) => {
+                unreachable!("the local completion test fake has no embedded HTTP server")
+            }
         }
     }
 
@@ -134,6 +187,8 @@ impl LocalRuntimeModelHandle {
             LocalRuntimeBackendHandle::Skippy { model, .. } => {
                 model.set_openai_guardrail_mode(mode)
             }
+            #[cfg(test)]
+            LocalRuntimeBackendHandle::LocalCompletionFake(_) => None,
         }
     }
 
@@ -181,14 +236,44 @@ impl LocalRuntimeModelHandle {
                         .collect(),
                 })
             }
+            #[cfg(test)]
+            LocalRuntimeBackendHandle::LocalCompletionFake(_) => None,
+        }
+    }
+
+    pub(super) fn register_startup_completion(
+        &self,
+        registry: &super::runtime_registry::RuntimeInstanceRegistry,
+        instance_id: &str,
+        model_ref: &str,
+        profile: &str,
+    ) {
+        if let Ok(mut registration) = self.startup_registration.lock() {
+            registration.take();
+            *registration =
+                registry
+                    .startup_local_completions
+                    .register(instance_id, model_ref, profile, self);
         }
     }
 
     pub(super) async fn shutdown(self) {
+        // Retirement and admission use one lock; no stale snapshot can acquire a
+        // new lease after this point while cancellation/drain waits for old work.
+        if let Ok(mut registration) = self.startup_registration.lock() {
+            registration.take();
+        }
         match self.inner {
             LocalRuntimeBackendHandle::Skippy { model, http, .. } => {
+                // Cancel and wait for in-flight local-only completions before
+                // the HTTP server and the native runtime go away.
+                model.drain_local_completions().await;
                 let _ = http.shutdown().await;
                 model.shutdown();
+            }
+            #[cfg(test)]
+            LocalRuntimeBackendHandle::LocalCompletionFake(fake) => {
+                fake.leases.cancel_and_drain().await;
             }
         }
     }
@@ -800,13 +885,14 @@ async fn start_local_skippy_model(
     Ok((
         model_name,
         LocalRuntimeModelHandle {
+            startup_registration: Default::default(),
             port: http.port(),
             backend: "skippy".into(),
             context_length,
             slots: plan.slots,
             capabilities,
             inner: LocalRuntimeBackendHandle::Skippy {
-                model: skippy_model,
+                model: Box::new(skippy_model),
                 http,
                 _death_tx: death_tx,
             },
@@ -962,13 +1048,14 @@ async fn start_local_package_v2_model(
     Ok((
         model_name,
         LocalRuntimeModelHandle {
+            startup_registration: Default::default(),
             port: http.port(),
             backend: "skippy".into(),
             context_length,
             slots: plan.slots,
             capabilities,
             inner: LocalRuntimeBackendHandle::Skippy {
-                model: handle,
+                model: Box::new(handle),
                 http,
                 _death_tx: death_tx,
             },

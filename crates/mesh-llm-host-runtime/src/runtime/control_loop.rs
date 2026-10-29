@@ -138,6 +138,7 @@ pub(super) async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecy
         runtime_instance_registry: &runtime_state.runtime_instance_registry,
         dashboard_processes: &runtime_state.dashboard_processes,
         dashboard_context_usage: &runtime_state.dashboard_context_usage,
+        local_completion_slot: &runtime_state.local_completion_slot,
         console_state,
         runtime_data_producer,
         runtime_event_tx,
@@ -438,6 +439,23 @@ pub(super) async fn run_auto_handle_control_request(
 ) -> bool {
     use super::{IntentSource, ModelIntent};
 
+    // Local-only completion sees only the loaded model records and the
+    // runtime slot; it is dispatched before the mesh-facing arms below.
+    let cmd = match super::local_completion::handle_local_completion_control(
+        super::local_completion::LocalCompletionAdmissionView {
+            runtime_models: &*ctx.runtime_models,
+            slot: ctx.local_completion_slot,
+            startup_models: ctx
+                .runtime_instance_registry
+                .startup_local_completions
+                .clone(),
+        },
+        cmd,
+    ) {
+        None => return false,
+        Some(cmd) => cmd,
+    };
+
     match cmd {
         api::RuntimeControlRequest::Join { invite_token, resp } => {
             let result = ctx.node.join_with_retry(&invite_token).await;
@@ -488,6 +506,12 @@ pub(super) async fn run_auto_handle_control_request(
             let _ = flush_output().await;
             emit_shutdown(None).await;
             true
+        }
+        api::RuntimeControlRequest::LocalCompletionModels { .. }
+        | api::RuntimeControlRequest::LocalCompletion { .. } => {
+            // Consumed by `handle_local_completion_control` above, which never
+            // hands these variants back.
+            false
         }
     }
 }

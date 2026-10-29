@@ -7,8 +7,14 @@ pub use mesh_llm_host_runtime::sdk::{
     EmbeddedMeshNodeBuilder, EmbeddedMeshNodeConfig, EmbeddedMeshNodeHandle, EmbeddedMeshNodeMode,
     EmbeddedMeshNodeStatus, EmbeddedMeshRequirementsConfig, EmbeddedMeshServingConfig,
     EmbeddedMeshStorageConfig, EmbeddedServeConfig, EmbeddedServeHandle, EmbeddedServeMode,
-    EmbeddedServeStatus, EmbeddedServingController, EmbeddedTrustPolicy,
-    SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION, start_embedded_node, start_embedded_serve,
+    EmbeddedServeStatus, EmbeddedServingController, EmbeddedTrustPolicy, LocalCompletionAdmitted,
+    LocalCompletionBackendErrorKind, LocalCompletionCancel, LocalCompletionCapability,
+    LocalCompletionClient, LocalCompletionEligibility, LocalCompletionError, LocalCompletionFinish,
+    LocalCompletionIneligibility, LocalCompletionJob, LocalCompletionLimits,
+    LocalCompletionMessage, LocalCompletionModel, LocalCompletionOutcome, LocalCompletionRequest,
+    LocalCompletionResponse, LocalCompletionResponseRejection, LocalCompletionRole,
+    LocalModelSelector, MAX_REQUEST_LABEL_BYTES, SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION,
+    start_embedded_node, start_embedded_serve,
 };
 
 pub mod config {
