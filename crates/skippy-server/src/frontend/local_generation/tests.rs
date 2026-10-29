@@ -193,6 +193,7 @@ fn recurrent_test_backend(
         linear_proposal_ingress: None,
         kv: Some(kv),
         iteration_scheduler,
+        local_only_scope: false,
     };
     Ok((backend, speculative))
 }
@@ -244,6 +245,7 @@ fn local_generation_signal_window_uses_configured_value() {
         linear_proposal_ingress: None,
         kv: None,
         iteration_scheduler,
+        local_only_scope: false,
     };
 
     assert_eq!(backend.generation_signal_window_tokens(), 37);
@@ -596,6 +598,7 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
         linear_proposal_ingress: None,
         kv: None,
         iteration_scheduler,
+        local_only_scope: false,
     };
     let sampling = SamplingConfig::default();
     // A multi-token prompt takes the whole-prompt prefill path. Keep this

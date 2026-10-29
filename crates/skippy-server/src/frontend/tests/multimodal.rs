@@ -228,6 +228,7 @@ fn local_openai_backend(config: StageConfig) -> Result<StageOpenAiBackend> {
         linear_proposal_ingress: None,
         kv: None,
         iteration_scheduler,
+        local_only_scope: false,
     })
 }
 
@@ -536,6 +537,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
         linear_proposal_ingress: None,
         kv: None,
         iteration_scheduler,
+        local_only_scope: false,
     };
     let response = backend
         .chat_completion(multimodal_chat_request(&fixture)?)

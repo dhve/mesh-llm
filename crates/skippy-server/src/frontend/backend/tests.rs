@@ -1243,6 +1243,7 @@ fn hooks_test_backend(hook_policy: Option<Arc<dyn OpenAiHookPolicy>>) -> StageOp
         linear_proposal_ingress: None,
         kv: None,
         iteration_scheduler,
+        local_only_scope: false,
     }
 }
 
@@ -1568,3 +1569,5 @@ async fn stage_backend_stream_denied_never_dispatches_and_fires_terminal_exactly
             if reason.contains("denied by policy")
     ));
 }
+
+mod local_only;

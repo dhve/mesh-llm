@@ -442,6 +442,7 @@ mod tests {
             linear_proposal_ingress: Some(config),
             kv: None,
             iteration_scheduler,
+            local_only_scope: false,
         };
         let sampling = SamplingConfig::default();
         let ids = OpenAiGenerationIds::new_with_trust(OpenAiCacheHints::default(), None, false);

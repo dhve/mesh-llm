@@ -358,7 +358,7 @@ pub(super) async fn load_split_runtime_generation_inner(
             slots: spec.slots,
             capabilities,
             inner: LocalRuntimeBackendHandle::Skippy {
-                model: handle,
+                model: Box::new(handle),
                 http,
                 _death_tx: death_tx,
             },

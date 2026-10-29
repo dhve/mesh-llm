@@ -37,6 +37,11 @@ pub struct CancellationToken {
 }
 
 impl CancellationToken {
+    /// Whether two tokens share one cancellation state.
+    pub fn is_same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.state, &other.state)
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -68,11 +73,40 @@ pub struct OpenAiRequestContext {
     request_id: Option<RequestId>,
     stream_usage_observation: bool,
     trusted_agent_session: bool,
+    /// Per-request privacy and budget policy. Backends that honour it run the
+    /// request without generation receipts, without prefix-cache lookup or
+    /// recording, and with an exact completion budget. See
+    /// [`Self::with_local_only_policy`].
+    local_only_policy: bool,
 }
 
 impl OpenAiRequestContext {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Create a context bound to an existing cancellation token, so a caller
+    /// that holds the token can cancel the backend work it dispatched.
+    pub fn with_cancellation(cancellation: CancellationToken) -> Self {
+        Self {
+            cancellation,
+            ..Self::default()
+        }
+    }
+
+    /// Request the local-only policy: no generation receipt may observe this
+    /// request, the prefix cache must be neither consulted nor updated, and a
+    /// `max_completion_tokens` that does not fit the remaining context is an
+    /// error instead of a silent clamp.
+    #[must_use]
+    pub fn with_local_only_policy(mut self) -> Self {
+        self.local_only_policy = true;
+        self
+    }
+
+    /// Whether [`Self::with_local_only_policy`] was requested.
+    pub fn requires_local_only_policy(&self) -> bool {
+        self.local_only_policy
     }
 
     /// Create a backend context correlated to a frontend request identifier.
@@ -134,6 +168,7 @@ impl Default for OpenAiRequestContext {
             request_id: None,
             stream_usage_observation: false,
             trusted_agent_session: false,
+            local_only_policy: false,
         }
     }
 }

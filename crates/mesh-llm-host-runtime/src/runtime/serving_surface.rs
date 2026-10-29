@@ -1635,6 +1635,15 @@ pub(super) async fn run_passive_listener_loop(
                         let result = node.join_with_retry(&invite_token).await;
                         let _ = resp.send(result);
                     }
+                    api::RuntimeControlRequest::LocalCompletionModels { resp } => {
+                        // A passive runtime serves no local models.
+                        let _ = resp.send(Ok(Vec::new()));
+                    }
+                    api::RuntimeControlRequest::LocalCompletion { resp, .. } => {
+                        let _ = resp.send(Err(
+                            crate::inference::local_completion::LocalCompletionError::NotServing,
+                        ));
+                    }
                     _ => {}
                 }
             }

@@ -807,6 +807,16 @@ impl OpenAiBackend for StageOpenAiBackend {
         request: ChatCompletionRequest,
         context: OpenAiRequestContext,
     ) -> OpenAiResult<ChatCompletionResponse> {
+        if context.requires_local_only_policy() && !self.local_only_scope {
+            // One choke point for the local-only policy: the scoped clone has
+            // no receipt sink, no prefix cache and no hook policy, so every
+            // downstream site that consults them sees "not configured".
+            let scoped = self.scoped_for_local_only();
+            return <Self as OpenAiBackend>::chat_completion_with_context(
+                &scoped, request, context,
+            )
+            .await;
+        }
         let ids = generation_ids(
             OpenAiCacheHints::from_chat_request(&request),
             request.agent_session(),
@@ -842,9 +852,10 @@ impl OpenAiBackend for StageOpenAiBackend {
                 json!(prompt.media.len()),
             );
             self.emit_openai_phase("stage.openai_chat_template", template_timer, template_attrs);
-            let max_tokens = GenerationTokenLimit::from_request(
+            let max_tokens = GenerationTokenLimit::from_request_with_strictness(
                 request.effective_max_tokens(),
                 self.default_max_tokens,
+                self.local_only_scope,
             );
             let chat_parse_metadata = prompt.chat_parse_metadata.clone();
             let output = self
@@ -951,9 +962,10 @@ impl OpenAiBackend for StageOpenAiBackend {
                 json!(prompt.media.len()),
             );
             self.emit_openai_phase("stage.openai_chat_template", template_timer, template_attrs);
-            let max_tokens = GenerationTokenLimit::from_request(
+            let max_tokens = GenerationTokenLimit::from_request_with_strictness(
                 request.effective_max_tokens(),
                 self.default_max_tokens,
+                self.local_only_scope,
             );
             let model = request.model.clone();
             let stream = self

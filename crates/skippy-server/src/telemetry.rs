@@ -169,6 +169,29 @@ fn stderr_telemetry_loop(rx: std_mpsc::Receiver<StderrTelemetryEvent>) {
 }
 
 impl Telemetry {
+    /// Replace only the external collector boundary while keeping production
+    /// level checks, event construction and enqueue behavior under test.
+    #[cfg(test)]
+    pub(crate) fn capture_for_test(
+        config: StageConfig,
+    ) -> (Self, impl FnMut() -> Vec<BTreeMap<String, Value>>) {
+        let (tx, mut rx) = mpsc::channel::<TelemetryEvent>(65_536);
+        let telemetry = Self {
+            tx: Some(tx),
+            stderr: None,
+            stats: Arc::new(TelemetryCounters::default()),
+            config: Arc::new(config),
+            level: TelemetryLevel::Debug,
+        };
+        (telemetry, move || {
+            let mut records = Vec::new();
+            while let Ok(event) = rx.try_recv() {
+                records.push(event.attributes);
+            }
+            records
+        })
+    }
+
     pub fn new(
         endpoint: Option<String>,
         capacity: usize,
@@ -324,6 +347,28 @@ impl Telemetry {
 
     pub fn is_enabled(&self) -> bool {
         self.level != TelemetryLevel::Off
+    }
+
+    /// A view of this telemetry that never emits above `max_level`. Shares the
+    /// exporter and counters; only the level check changes. Used to keep
+    /// token-level debug attributes out of a privacy-scoped request.
+    pub fn capped_at(&self, max_level: TelemetryLevel) -> Self {
+        fn rank(level: TelemetryLevel) -> u8 {
+            match level {
+                TelemetryLevel::Off => 0,
+                TelemetryLevel::Summary => 1,
+                TelemetryLevel::Debug => 2,
+            }
+        }
+        let level = if rank(self.level) > rank(max_level) {
+            max_level
+        } else {
+            self.level
+        };
+        Self {
+            level,
+            ..self.clone()
+        }
     }
 
     pub fn is_debug_enabled(&self) -> bool {

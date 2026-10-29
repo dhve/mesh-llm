@@ -40,6 +40,17 @@ impl MeshNode {
         self.handle.status().await
     }
 
+    /// Cheap, cloneable client for local-only completions. Holds no lock on
+    /// this node. See `LocalCompletionClient`.
+    pub fn local_completion_client(
+        &self,
+    ) -> Result<
+        mesh_llm_embedded_runtime::LocalCompletionClient,
+        mesh_llm_embedded_runtime::LocalCompletionError,
+    > {
+        self.handle.local_completion_client()
+    }
+
     pub async fn shutdown(self) -> anyhow::Result<()> {
         self.handle.stop().await
     }

@@ -33,6 +33,18 @@ pub use embedded_node::{MeshNode, MeshNodeBuilder, MeshNodeStatus, OpenAiClient}
 #[cfg(feature = "serving")]
 pub use mesh_llm_embedded_runtime::initialize_host_runtime;
 
+/// Local-only, single-stage completion against a model this node serves in
+/// process. See [`EmbeddedNodeHandle::local_completion_client`].
+#[cfg(feature = "serving")]
+pub use mesh_llm_embedded_runtime::{
+    LocalCompletionBackendErrorKind, LocalCompletionCancel, LocalCompletionCapability,
+    LocalCompletionClient, LocalCompletionEligibility, LocalCompletionError, LocalCompletionFinish,
+    LocalCompletionIneligibility, LocalCompletionJob, LocalCompletionLimits,
+    LocalCompletionMessage, LocalCompletionModel, LocalCompletionOutcome, LocalCompletionRequest,
+    LocalCompletionResponse, LocalCompletionResponseRejection, LocalCompletionRole,
+    LocalModelSelector, MAX_REQUEST_LABEL_BYTES,
+};
+
 #[cfg(feature = "serving")]
 pub mod embedded_runtime {
     pub use mesh_llm_embedded_runtime::{
@@ -448,6 +460,13 @@ impl EmbeddedNodeHandle {
 
     pub async fn join_token(&self, token: impl Into<String>) -> Result<()> {
         self.inner.join_token(token).await
+    }
+
+    /// Cheap. The client is `Clone + Send + Sync` and holds no lock on this
+    /// handle, so a caller can release its own runtime lock before awaiting.
+    /// Fails only when the runtime control channel is already gone.
+    pub fn local_completion_client(&self) -> Result<LocalCompletionClient, LocalCompletionError> {
+        self.inner.local_completion_client()
     }
 
     pub async fn stop(self) -> Result<()> {

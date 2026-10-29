@@ -42,6 +42,10 @@ pub mod config {
 #[path = "sdk/native_runtime.rs"]
 pub mod native_runtime;
 
+#[path = "sdk/local_completion.rs"]
+pub mod local_completion;
+pub use local_completion::*;
+
 const DEFAULT_EMBEDDED_WORKER_STACK_SIZE: usize = 8 * 1024 * 1024;
 const EMBEDDED_STARTUP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -62,6 +66,25 @@ pub struct EmbeddedServeHandle {
     control_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::api::RuntimeControlRequest>>,
     task: Option<std::thread::JoinHandle<Result<()>>>,
     _config_snapshot: NamedTempFile,
+    /// Single admission permit shared by every `LocalCompletionClient` made
+    /// from this handle.
+    local_completion_admission: Arc<tokio::sync::Semaphore>,
+}
+
+#[cfg(test)]
+impl EmbeddedServeHandle {
+    /// A handle with no runtime behind it, for unit tests of the SDK surface.
+    pub(crate) fn detached_for_tests() -> Self {
+        Self {
+            api_base_url: String::new(),
+            console_url: String::new(),
+            invite_token: None,
+            control_tx: None,
+            task: None,
+            _config_snapshot: NamedTempFile::new().expect("temp config snapshot"),
+            local_completion_admission: Arc::new(tokio::sync::Semaphore::new(1)),
+        }
+    }
 }
 
 pub type EmbeddedMeshNodeHandle = EmbeddedServeHandle;
@@ -188,6 +211,7 @@ pub async fn start_embedded_node(
         control_tx: Some(control_tx),
         task: Some(task),
         _config_snapshot: config_snapshot,
+        local_completion_admission: Arc::new(tokio::sync::Semaphore::new(1)),
     })
 }
 

@@ -144,6 +144,32 @@ impl OpenAiError {
         self.status
     }
 
+    /// The closed error classification this error was built from, recovered
+    /// from its wire `type` and `code`. `None` when the code was overridden
+    /// with a value outside the closed set (see [`Self::with_code`]).
+    pub fn kind(&self) -> Option<OpenAiErrorKind> {
+        let code = self.code.as_deref()?;
+        [
+            OpenAiErrorKind::InvalidRequest,
+            OpenAiErrorKind::Authentication,
+            OpenAiErrorKind::Permission,
+            OpenAiErrorKind::NotFound,
+            OpenAiErrorKind::RateLimit,
+            OpenAiErrorKind::PayloadTooLarge,
+            OpenAiErrorKind::Timeout,
+            OpenAiErrorKind::Internal,
+            OpenAiErrorKind::ServiceUnavailable,
+            OpenAiErrorKind::ContextLengthExceeded,
+            OpenAiErrorKind::UnsupportedFeature,
+            OpenAiErrorKind::Cancelled,
+        ]
+        .into_iter()
+        .find(|kind| {
+            let (error_type, kind_code) = kind_to_openai_fields(*kind);
+            error_type == self.error_type && kind_code == code
+        })
+    }
+
     pub fn with_code(mut self, code: impl Into<String>) -> Self {
         self.code = Some(code.into());
         self

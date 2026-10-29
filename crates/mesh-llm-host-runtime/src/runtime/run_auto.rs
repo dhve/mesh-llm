@@ -1153,6 +1153,7 @@ pub(super) struct RunAutoRuntimeLoopContext<'a> {
     pub(super) runtime_instance_registry: &'a RuntimeInstanceRegistry,
     pub(super) dashboard_processes: &'a Arc<tokio::sync::Mutex<Vec<api::RuntimeProcessPayload>>>,
     pub(super) dashboard_context_usage: &'a DashboardContextUsage,
+    pub(super) local_completion_slot: &'a Arc<tokio::sync::Semaphore>,
     pub(super) console_state: Option<&'a api::MeshApi>,
     pub(super) runtime_data_producer: Option<&'a crate::runtime_data::RuntimeDataProducer>,
     pub(super) runtime_event_tx: &'a tokio::sync::mpsc::UnboundedSender<RuntimeEvent>,
@@ -1172,6 +1173,8 @@ pub(super) struct RunAutoRuntimeState {
     pub(super) next_runtime_instance_sequence: u64,
     pub(super) dashboard_processes: Arc<tokio::sync::Mutex<Vec<api::RuntimeProcessPayload>>>,
     pub(super) dashboard_context_usage: DashboardContextUsage,
+    /// One admitted local-only completion per runtime.
+    pub(super) local_completion_slot: Arc<tokio::sync::Semaphore>,
     pub(super) input_handler_enabled: bool,
     pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     /// The installed process-local logging service owned by this runtime
@@ -1218,6 +1221,7 @@ pub(super) fn initialize_run_auto_runtime_state(options: &RuntimeOptions) -> Run
         next_runtime_instance_sequence: 1_u64,
         dashboard_processes: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         dashboard_context_usage: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        local_completion_slot: super::local_completion::new_local_completion_slot(),
         input_handler_enabled: output_sink()
             .and_then(|sink| sink.console_session_mode())
             .is_some(),
