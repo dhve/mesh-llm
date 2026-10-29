@@ -445,6 +445,10 @@ pub(super) async fn run_auto_handle_control_request(
         super::local_completion::LocalCompletionAdmissionView {
             runtime_models: &*ctx.runtime_models,
             slot: ctx.local_completion_slot,
+            startup_models: ctx
+                .runtime_instance_registry
+                .startup_local_completions
+                .clone(),
         },
         cmd,
     ) {

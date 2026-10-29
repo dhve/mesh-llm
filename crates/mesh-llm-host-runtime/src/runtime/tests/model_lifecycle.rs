@@ -374,7 +374,7 @@ async fn register_runtime_instance_preserves_existing_known_descriptor_capabilit
     let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
         .await
         .expect("test node should initialize");
-    let registry = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+    let registry = RuntimeInstanceRegistry::default();
     let vision_model = "Qwen3VL-2B-Instruct-Q4_K_M";
     let text_model = "Qwen3-8B-Q4_K_M";
     let vision_capabilities = models::ModelCapabilities {

@@ -96,6 +96,9 @@ pub(super) enum LocalRuntimeBackendHandle {
 }
 
 pub(super) struct LocalRuntimeModelHandle {
+    // First field: retire startup admission before backend destruction on plain drop.
+    pub(super) startup_registration:
+        std::sync::Mutex<Option<super::local_completion::StartupRegistration>>,
     pub(super) port: u16,
     pub(super) backend: String,
     pub(super) context_length: u32,
@@ -238,7 +241,28 @@ impl LocalRuntimeModelHandle {
         }
     }
 
+    pub(super) fn register_startup_completion(
+        &self,
+        registry: &super::runtime_registry::RuntimeInstanceRegistry,
+        instance_id: &str,
+        model_ref: &str,
+        profile: &str,
+    ) {
+        if let Ok(mut registration) = self.startup_registration.lock() {
+            registration.take();
+            *registration =
+                registry
+                    .startup_local_completions
+                    .register(instance_id, model_ref, profile, self);
+        }
+    }
+
     pub(super) async fn shutdown(self) {
+        // Retirement and admission use one lock; no stale snapshot can acquire a
+        // new lease after this point while cancellation/drain waits for old work.
+        if let Ok(mut registration) = self.startup_registration.lock() {
+            registration.take();
+        }
         match self.inner {
             LocalRuntimeBackendHandle::Skippy { model, http, .. } => {
                 // Cancel and wait for in-flight local-only completions before
@@ -861,6 +885,7 @@ async fn start_local_skippy_model(
     Ok((
         model_name,
         LocalRuntimeModelHandle {
+            startup_registration: Default::default(),
             port: http.port(),
             backend: "skippy".into(),
             context_length,
@@ -1023,6 +1048,7 @@ async fn start_local_package_v2_model(
     Ok((
         model_name,
         LocalRuntimeModelHandle {
+            startup_registration: Default::default(),
             port: http.port(),
             backend: "skippy".into(),
             context_length,

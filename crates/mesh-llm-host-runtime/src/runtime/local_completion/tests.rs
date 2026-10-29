@@ -39,6 +39,7 @@ fn fake_entry(
         model_name: model_id.to_string(),
         profile: String::new(),
         handle: LocalRuntimeModelHandle {
+            startup_registration: Default::default(),
             port: 0,
             backend: "skippy".to_string(),
             context_length: 4096,
@@ -75,6 +76,7 @@ fn view<'a>(
     LocalCompletionAdmissionView {
         runtime_models: models,
         slot,
+        startup_models: StartupLocalCompletions::default(),
     }
 }
 
@@ -270,7 +272,15 @@ async fn dispatch_uses_the_loaded_local_target_and_never_a_remote_or_router_trap
 /// traps untouched.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_control_loop_binding_dispatches_locally_and_never_touches_routing_traps() {
-    use crate::runtime::control_loop::run_auto_handle_control_request;
+    real_control_loop_binding(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_control_loop_binding_includes_startup_owned_models_without_routing() {
+    real_control_loop_binding(true).await;
+}
+
+async fn real_control_loop_binding(startup_owned: bool) {
     use crate::runtime::dashboard::DashboardContextUsage;
     use crate::runtime::local::{RuntimeEvent, openai_guardrail_policy_handle};
     use crate::runtime::model_reconciliation::{
@@ -334,13 +344,23 @@ async fn real_control_loop_binding_dispatches_locally_and_never_touches_routing_
         LocalModelLoadShape::SingleStage,
     );
     let mut runtime_models = HashMap::new();
-    runtime_models.insert("embedded-1".to_string(), entry);
+    let runtime_instance_registry = RuntimeInstanceRegistry::default();
+    let startup_entry = if startup_owned {
+        entry.handle.register_startup_completion(
+            &runtime_instance_registry,
+            "embedded-1",
+            "qwen",
+            "startup",
+        );
+        Some(entry)
+    } else {
+        runtime_models.insert("embedded-1".to_string(), entry);
+        None
+    };
     let mut runtime_survey_models = HashMap::new();
     let mut managed_models = HashMap::new();
     let runtime_capacity_ledger = RuntimeCapacityLedger::default();
     let mut next_runtime_instance_sequence = 1_u64;
-    let runtime_instance_registry: RuntimeInstanceRegistry =
-        Arc::new(tokio::sync::Mutex::new(HashMap::new()));
     let dashboard_processes = Arc::new(tokio::sync::Mutex::new(Vec::new()));
     let dashboard_context_usage: DashboardContextUsage =
         Arc::new(tokio::sync::Mutex::new(HashMap::new()));
@@ -377,20 +397,29 @@ async fn real_control_loop_binding_dispatches_locally_and_never_touches_routing_
     };
     let client = LocalCompletionClient::new(control_tx.clone(), Arc::new(Semaphore::new(1)));
 
-    // Listing through the real binding.
-    let listing = tokio::spawn({
-        let client = client.clone();
-        async move { client.local_models().await }
-    });
-    let cmd = control_rx.recv().await.expect("listing request");
-    assert!(
-        !run_auto_handle_control_request(&mut ctx, cmd).await,
-        "a listing is not a shutdown"
+    assert_control_binding(&mut ctx, client, &mut control_rx, &local).await;
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        trap_hits.load(Ordering::SeqCst),
+        0,
+        "the generic ingress target was never contacted"
     );
-    let listed = listing.await.expect("task").expect("listing");
-    assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0].model_id, "qwen");
-    assert_eq!(listed[0].eligibility, LocalCompletionEligibility::Eligible);
+    assert_eq!(leases.in_flight(), 0);
+    assert_eq!(slot.available_permits(), 1);
+    drop(startup_entry);
+    trap_task.abort();
+}
+
+async fn assert_control_binding(
+    ctx: &mut crate::runtime::RunAutoRuntimeLoopContext<'_>,
+    client: LocalCompletionClient,
+    control_rx: &mut mpsc::UnboundedReceiver<api::RuntimeControlRequest>,
+    local: &FakeBackend,
+) {
+    use crate::runtime::control_loop::run_auto_handle_control_request;
+
+    assert_control_listing(ctx, &client, control_rx).await;
 
     // A model id that is BOTH loaded locally and advertised at the trap
     // listener runs on the loaded record; the trap sees no connection.
@@ -403,7 +432,7 @@ async fn real_control_loop_binding_dispatches_locally_and_never_touches_routing_
         }
     });
     let cmd = control_rx.recv().await.expect("submit request");
-    assert!(!run_auto_handle_control_request(&mut ctx, cmd).await);
+    assert!(!run_auto_handle_control_request(ctx, cmd).await);
     let job = submit.await.expect("task").expect("admitted");
     assert_eq!(job.instance_id(), "embedded-1");
     let completed = job.wait().await.expect("completed");
@@ -422,23 +451,36 @@ async fn real_control_loop_binding_dispatches_locally_and_never_touches_routing_
         }
     });
     let cmd = control_rx.recv().await.expect("submit request");
-    assert!(!run_auto_handle_control_request(&mut ctx, cmd).await);
+    assert!(!run_auto_handle_control_request(ctx, cmd).await);
     assert_eq!(
         submit.await.expect("task").err(),
         Some(LocalCompletionError::ModelNotLoadedLocally {
             model: "remote-only".into()
         })
     );
+}
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    assert_eq!(
-        trap_hits.load(Ordering::SeqCst),
-        0,
-        "the generic ingress target was never contacted"
+async fn assert_control_listing(
+    ctx: &mut crate::runtime::RunAutoRuntimeLoopContext<'_>,
+    client: &LocalCompletionClient,
+    control_rx: &mut mpsc::UnboundedReceiver<api::RuntimeControlRequest>,
+) {
+    use crate::runtime::control_loop::run_auto_handle_control_request;
+
+    // Listing through the real binding.
+    let listing = tokio::spawn({
+        let client = client.clone();
+        async move { client.local_models().await }
+    });
+    let cmd = control_rx.recv().await.expect("listing request");
+    assert!(
+        !run_auto_handle_control_request(ctx, cmd).await,
+        "a listing is not a shutdown"
     );
-    assert_eq!(leases.in_flight(), 0);
-    assert_eq!(slot.available_permits(), 1);
-    trap_task.abort();
+    let listed = listing.await.expect("task").expect("listing");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].model_id, "qwen");
+    assert_eq!(listed[0].eligibility, LocalCompletionEligibility::Eligible);
 }
 
 #[tokio::test]

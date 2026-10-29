@@ -12,8 +12,19 @@ use anyhow::Result;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-pub(super) type RuntimeInstanceRegistry =
-    Arc<tokio::sync::Mutex<HashMap<String, BTreeMap<String, Option<u32>>>>>;
+type RuntimeInstanceMetadata = HashMap<String, BTreeMap<String, Option<u32>>>;
+
+/// Shared per-runtime metadata and handle-owned startup completion registrations.
+#[derive(Clone, Default)]
+pub(super) struct RuntimeInstanceRegistry {
+    metadata: Arc<tokio::sync::Mutex<RuntimeInstanceMetadata>>,
+    pub(super) startup_local_completions: super::local_completion::StartupLocalCompletions,
+}
+impl RuntimeInstanceRegistry {
+    async fn lock(&self) -> tokio::sync::MutexGuard<'_, RuntimeInstanceMetadata> {
+        self.metadata.lock().await
+    }
+}
 
 pub(super) fn next_runtime_instance_id(next_sequence: &mut u64) -> String {
     let instance_id = format!("runtime-{}", *next_sequence);

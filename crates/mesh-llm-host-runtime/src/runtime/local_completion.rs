@@ -1,5 +1,6 @@
 //! Control-loop side of the local-only completion: resolve a loaded model
-//! from `runtime_models`, lease it, take the runtime slot, and hand the
+//! from dynamic handles or handle-owned startup registrations, lease it, take
+//! the runtime slot, and hand the
 //! generation to a supervisor task that owns every permit until the backend
 //! terminates. Nothing here touches mesh targets, the ingress or peers.
 
@@ -8,6 +9,9 @@ use std::sync::Arc;
 
 use openai_frontend::CancellationToken;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
+
+mod startup_registry;
+pub(super) use startup_registry::{StartupLocalCompletions, StartupRegistration};
 
 use super::model_lifecycle::RuntimeModelHandleEntry;
 use crate::api;
@@ -31,6 +35,7 @@ pub(super) fn new_local_completion_slot() -> Arc<Semaphore> {
 pub(super) struct LocalCompletionAdmissionView<'a> {
     pub(super) runtime_models: &'a HashMap<String, RuntimeModelHandleEntry>,
     pub(super) slot: &'a Arc<Semaphore>,
+    pub(super) startup_models: StartupLocalCompletions,
 }
 
 /// Dispatch the local-completion control requests. Returns the request back
@@ -42,7 +47,7 @@ pub(super) fn handle_local_completion_control(
 ) -> Option<api::RuntimeControlRequest> {
     match cmd {
         api::RuntimeControlRequest::LocalCompletionModels { resp } => {
-            let _ = resp.send(Ok(list_local_completion_models(&view)));
+            let _ = resp.send(list_local_completion_models(&view));
             None
         }
         api::RuntimeControlRequest::LocalCompletion {
@@ -134,14 +139,16 @@ impl LocalCompletionCandidate for RuntimeModelCandidate<'_> {
 /// Content free listing of every loaded runtime model with eligibility.
 fn list_local_completion_models(
     view: &LocalCompletionAdmissionView<'_>,
-) -> Vec<LocalCompletionModel> {
+) -> Result<Vec<LocalCompletionModel>, LocalCompletionError> {
+    let startup = view.startup_models.lock()?;
     let mut models: Vec<LocalCompletionModel> = view
         .runtime_models
         .iter()
         .map(|(instance_id, entry)| RuntimeModelCandidate { instance_id, entry }.describe())
         .collect();
+    models.extend(startup.values().map(LocalCompletionCandidate::describe));
     models.sort_by(|left, right| left.instance_id.cmp(&right.instance_id));
-    models
+    Ok(models)
 }
 
 /// Admit one local completion after validation, model resolution, leasing
@@ -160,7 +167,16 @@ fn admit(
         .iter()
         .map(|(instance_id, entry)| RuntimeModelCandidate { instance_id, entry })
         .collect();
-    let target = resolve_local_completion_target(candidates.iter(), &request.model)?;
+    let startup = view.startup_models.lock()?;
+    let candidates = candidates
+        .iter()
+        .map(|candidate| candidate as &dyn LocalCompletionCandidate)
+        .chain(
+            startup
+                .values()
+                .map(|candidate| candidate as &dyn LocalCompletionCandidate),
+        );
+    let target = resolve_local_completion_target(candidates, &request.model)?;
     let identity = LocalCompletionIdentity {
         model_id: target.model_id().to_string(),
         instance_id: target.instance_id().to_string(),

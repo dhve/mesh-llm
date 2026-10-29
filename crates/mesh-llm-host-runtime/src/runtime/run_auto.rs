@@ -1216,7 +1216,7 @@ pub(super) fn initialize_run_auto_runtime_state(options: &RuntimeOptions) -> Run
         runtime_models: HashMap::new(),
         runtime_survey_models: HashMap::new(),
         managed_models: HashMap::new(),
-        runtime_instance_registry: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        runtime_instance_registry: RuntimeInstanceRegistry::default(),
         runtime_capacity_ledger: RuntimeCapacityLedger::default(),
         next_runtime_instance_sequence: 1_u64,
         dashboard_processes: Arc::new(tokio::sync::Mutex::new(Vec::new())),

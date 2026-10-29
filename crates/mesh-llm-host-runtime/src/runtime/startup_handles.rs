@@ -469,6 +469,12 @@ pub(super) async fn startup_register_loaded_runtime(
     loaded_name: &str,
     handle: &LocalRuntimeModelHandle,
 ) -> api::RuntimeProcessPayload {
+    handle.register_startup_completion(
+        ctx.runtime_instance_registry,
+        ctx.instance_id,
+        loaded_name,
+        ctx.runtime_profile,
+    );
     let previous_port = ctx.lifecycle_port.swap(handle.port, Ordering::AcqRel);
     if previous_port != 0 && previous_port != handle.port {
         ctx.node
@@ -994,3 +1000,7 @@ mod startup_failure_policy_tests {
         assert_eq!(*events.lock().unwrap(), ["started", "prepared", "failed"]);
     }
 }
+
+#[cfg(test)]
+#[path = "startup_handles/local_completion_tests.rs"]
+mod local_completion_tests;

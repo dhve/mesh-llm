@@ -352,6 +352,7 @@ pub(super) async fn load_split_runtime_generation_inner(
     Ok(SplitRuntimeGenerationHandle {
         loaded_name: spec.model_ref.to_string(),
         handle: LocalRuntimeModelHandle {
+            startup_registration: Default::default(),
             port: http.port(),
             backend: "skippy".into(),
             context_length: spec.ctx_size,
